@@ -5,6 +5,8 @@
 搖桿（Joystick）、兩點／多點路線、GPX 匯入、可調速度，並可選**擬真移動**
 （起步加速、轉彎／終點減速、GPS 抖動）。
 
+![FakeGPS Studio 介面截圖](docs/screenshot.png)
+
 > **僅供合法用途。** 定位模擬是標準的開發／測試功能（等同 Xcode 的
 > *Simulate Location* 與 Android 開發者選項的 *模擬位置*）。請用於測試你
 > 擁有或獲授權的 App、除錯定位功能與開發。用於規避反作弊、詐騙或違反服務
