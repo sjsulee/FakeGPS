@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+backend/.venv/
+.venv/
+*.egg-info/
+
+# Android / Gradle
+android-companion/.gradle/
+android-companion/build/
+android-companion/app/build/
+android-companion/local.properties
+*.iml
+.idea/
+
+# Editor / tooling
+.claude/
+.DS_Store
+
+# Logs
+*.log

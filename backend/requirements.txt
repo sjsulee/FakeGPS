@@ -1,0 +1,9 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+# 9.x required for iOS 17+ / iOS 26; its tunneld + DVT API is async (the iOS
+# driver runs it on a dedicated event loop). 4.x pulls an incompatible
+# ipsw_parser and predates these devices — do not downgrade.
+pymobiledevice3>=9.17.0
+pywebview==5.3.2
+websockets==14.1
+httpx

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FakeGPS Studio</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="sidebar">
+    <h1>FakeGPS&nbsp;Studio</h1>
+
+    <section>
+      <label for="device">Device</label>
+      <div class="row">
+        <select id="device"></select>
+        <button id="refresh" title="Rescan">⟳</button>
+      </div>
+      <button id="connect" class="primary">Connect</button>
+      <div id="devinfo" class="muted"></div>
+    </section>
+
+    <section>
+      <h2>Mode</h2>
+      <div class="tabs">
+        <button data-mode="teleport" class="tab active">Teleport</button>
+        <button data-mode="joystick" class="tab">Joystick</button>
+        <button data-mode="route" class="tab">Route</button>
+      </div>
+
+      <div id="panel-teleport" class="panel">
+        <p class="muted">Click the map to drop a pin, then teleport.</p>
+        <div class="row">
+          <input id="t-lat" placeholder="lat" />
+          <input id="t-lon" placeholder="lon" />
+        </div>
+        <button id="do-teleport" class="primary">Teleport here</button>
+      </div>
+
+      <div id="panel-joystick" class="panel hidden">
+        <p class="muted">Set a start point first. Click a button, or use arrow keys / WASD — hold to keep walking.</p>
+        <div class="dpad">
+          <button data-h="0">▲</button>
+          <div class="dpad-mid">
+            <button data-h="270">◀</button>
+            <button id="stopwalk">■</button>
+            <button data-h="90">▶</button>
+          </div>
+          <button data-h="180">▼</button>
+        </div>
+      </div>
+
+      <div id="panel-route" class="panel hidden">
+        <p class="muted">Click the map to add waypoints (need 2+).</p>
+        <div class="row">
+          <button id="route-clear">Clear pts</button>
+          <label class="chk"><input type="checkbox" id="route-loop" /> Loop</label>
+        </div>
+        <div class="row">
+          <label class="chk"><input type="checkbox" id="route-realistic" /> 擬真移動</label>
+        </div>
+        <div id="jitter-row" class="row hidden">
+          <label for="route-jitter">GPS 抖動 (m)</label>
+          <input id="route-jitter" type="number" min="0" max="20" step="0.5" value="0" />
+        </div>
+        <p class="muted">擬真模式：起步加速、轉彎/終點減速、速度微抖；抖動模擬 GPS 雜訊。</p>
+        <div class="row">
+          <input type="file" id="gpx" accept=".gpx" />
+        </div>
+        <button id="do-route" class="primary">Start route</button>
+        <button id="route-stop" class="hidden">Stop</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Speed</h2>
+      <select id="speed-preset">
+        <option value="1.4">Walk · 5 km/h</option>
+        <option value="3.3">Run · 12 km/h</option>
+        <option value="6.0">Cycle · 21 km/h</option>
+        <option value="13.9">Drive · 50 km/h</option>
+      </select>
+      <input type="range" id="speed" min="0.5" max="30" step="0.1" value="1.4" />
+      <div class="muted"><span id="speed-val">1.4</span> m/s</div>
+    </section>
+
+    <section>
+      <button id="clear" class="danger">Stop &amp; restore real GPS</button>
+      <div id="status" class="muted"></div>
+    </section>
+  </div>
+
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
