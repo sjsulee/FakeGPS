@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Iterable, Iterator, Optional
@@ -22,6 +23,24 @@ class Point:
 
     def as_tuple(self) -> tuple[float, float]:
         return (self.lat, self.lon)
+
+
+@dataclass(frozen=True)
+class LocationFix:
+    """A complete GPS fix with all metadata for realistic simulation."""
+    lat: float
+    lon: float
+    altitude: float = 0.0
+    speed: float = 0.0  # m/s
+    bearing: float = 0.0  # degrees clockwise from north
+    h_accuracy: float = 5.0  # horizontal accuracy, metres
+    v_accuracy: float = 3.0  # vertical accuracy, metres
+    speed_accuracy: float = 0.5  # m/s
+    bearing_accuracy: float = 10.0  # degrees
+    timestamp: Optional[float] = None  # Unix timestamp; generated if None
+
+    def as_point(self) -> Point:
+        return Point(self.lat, self.lon)
 
 
 def _rad(d: float) -> float:
@@ -112,6 +131,77 @@ SPEED_PRESETS = {
 
 
 # --------------------------------------------------------------------------- #
+# Realistic GPS noise and accuracy                                            #
+# --------------------------------------------------------------------------- #
+class GaussMarkovNoise:
+    """Correlated GPS drift using Gauss-Markov process.
+    
+    This produces realistic GPS wander: position drifts gradually rather than
+    jumping randomly each tick. Models common GPS multipath/atmosphere effects.
+    """
+    def __init__(self, sigma: float = 5.0, beta: float = 0.1, seed: Optional[int] = None):
+        """
+        Args:
+            sigma: steady-state std deviation in metres (typical 3-8m for consumer GPS)
+            beta: correlation time constant; smaller = slower drift (0.05-0.2 typical)
+            seed: RNG seed for reproducibility
+        """
+        self.sigma = sigma
+        self.beta = beta
+        self.rng = random.Random(seed)
+        # Gauss-Markov state: north and east offset in metres
+        self.offset_n = 0.0
+        self.offset_e = 0.0
+        
+    def step(self, dt: float = 1.0) -> tuple[float, float]:
+        """Advance one time step and return (north_offset_m, east_offset_m)."""
+        # Gauss-Markov: x(t+dt) = x(t)*exp(-beta*dt) + w
+        decay = math.exp(-self.beta * dt)
+        noise_std = self.sigma * math.sqrt(1 - decay * decay)
+        self.offset_n = self.offset_n * decay + self.rng.gauss(0, noise_std)
+        self.offset_e = self.offset_e * decay + self.rng.gauss(0, noise_std)
+        return (self.offset_n, self.offset_e)
+    
+    def apply_to_point(self, p: Point, dt: float = 1.0) -> Point:
+        """Apply drift to a point and return the noisy position."""
+        n, e = self.step(dt)
+        # Convert north/east offset to lat/lon
+        # Rough approximation: 1 degree lat ≈ 111 km, lon varies by latitude
+        dlat = n / 111_000.0
+        dlon = e / (111_000.0 * math.cos(_rad(p.lat)))
+        return Point(p.lat + dlat, p.lon + dlon)
+
+
+class AccuracyModel:
+    """Realistic horizontal/vertical accuracy that varies over time."""
+    def __init__(self, 
+                 h_base: float = 5.0, 
+                 h_variation: float = 0.4,
+                 v_base: float = 8.0,
+                 v_variation: float = 0.5,
+                 seed: Optional[int] = None):
+        """
+        Args:
+            h_base: baseline horizontal accuracy in metres (3-10m typical)
+            h_variation: fractional random variation (0.3-0.5 typical)
+            v_base: baseline vertical accuracy (typically worse than horizontal)
+            v_variation: fractional variation for vertical
+            seed: RNG seed
+        """
+        self.h_base = h_base
+        self.h_variation = h_variation
+        self.v_base = v_base
+        self.v_variation = v_variation
+        self.rng = random.Random(seed)
+        
+    def sample(self) -> tuple[float, float]:
+        """Return (h_accuracy, v_accuracy) in metres."""
+        h = max(1.0, self.h_base * (1 + self.rng.uniform(-self.h_variation, self.h_variation)))
+        v = max(1.0, self.v_base * (1 + self.rng.uniform(-self.v_variation, self.v_variation)))
+        return (h, v)
+
+
+# --------------------------------------------------------------------------- #
 # Realistic movement model                                                    #
 # --------------------------------------------------------------------------- #
 # Constant-speed playback (walk()) produces unnaturally rigid traces: instant
@@ -127,9 +217,21 @@ class MovementConfig:
     decel: float = 1.2              # braking (m/s^2)
     turn_speed: float = 0.6         # speed cap through a sharp turn (m/s)
     turn_threshold_deg: float = 40.0  # bearing change counted as "sharp"
-    jitter_m: float = 0.0           # GPS noise std-dev in metres (0 = off)
+    jitter_m: float = 0.0           # GPS noise std-dev in metres (0 = off; for legacy simple jitter)
     speed_variation: float = 0.06   # fractional random speed wobble (+/-)
     seed: Optional[int] = None      # set for reproducible traces
+    # New realistic simulation parameters
+    use_gm_noise: bool = True       # Use Gauss-Markov correlated noise instead of simple jitter
+    gm_sigma: float = 5.0           # Gauss-Markov noise level (m)
+    gm_beta: float = 0.1            # Gauss-Markov correlation (smaller = slower drift)
+    base_altitude: float = 50.0     # Starting altitude in metres
+    altitude_variation: float = 5.0 # Random altitude variation (m)
+    h_accuracy_base: float = 5.0    # Baseline horizontal accuracy (m)
+    h_accuracy_var: float = 0.4     # Horizontal accuracy variation fraction
+    v_accuracy_base: float = 8.0    # Baseline vertical accuracy (m)
+    v_accuracy_var: float = 0.5     # Vertical accuracy variation fraction
+    speed_accuracy: float = 0.5     # Speed measurement accuracy (m/s)
+    bearing_accuracy: float = 10.0  # Bearing accuracy (degrees)
 
     @classmethod
     def for_speed(cls, max_speed: float, **kw) -> "MovementConfig":
@@ -194,15 +296,33 @@ def _jitter(p: Point, sigma_m: float, rng: random.Random) -> Point:
     return destination(p, brg, dist)
 
 
-def simulate(path: list[Point], cfg: MovementConfig, tick_s: float) -> Iterator[Point]:
-    """Yield one fix per tick following a lifelike speed profile.
+def simulate(path: list[Point], cfg: MovementConfig, tick_s: float) -> Iterator[LocationFix]:
+    """Yield one fix per tick following a lifelike speed profile with full GPS metadata.
 
-    The caller sleeps tick_s between yields and pushes each point to the device,
-    exactly like walk(). Speed eases up from rest, brakes for sharp turns and
-    the finish line, wobbles slightly, and (optionally) carries GPS jitter.
+    The caller sleeps tick_s between yields and pushes each fix to the device.
+    Speed eases up from rest, brakes for sharp turns and the finish line,
+    wobbles slightly, and carries realistic GPS noise and accuracy variation.
     """
     if len(path) < 2:
-        yield from path
+        # Single point: return stationary fix
+        if path:
+            noise_gen = GaussMarkovNoise(cfg.gm_sigma, cfg.gm_beta, cfg.seed) if cfg.use_gm_noise else None
+            acc_model = AccuracyModel(cfg.h_accuracy_base, cfg.h_accuracy_var, 
+                                     cfg.v_accuracy_base, cfg.v_accuracy_var, cfg.seed)
+            rng = random.Random(cfg.seed)
+            p = path[0]
+            if noise_gen:
+                p = noise_gen.apply_to_point(p, tick_s)
+            h_acc, v_acc = acc_model.sample()
+            alt = cfg.base_altitude + rng.uniform(-cfg.altitude_variation, cfg.altitude_variation)
+            yield LocationFix(
+                lat=p.lat, lon=p.lon, altitude=alt,
+                speed=0.0, bearing=0.0,
+                h_accuracy=h_acc, v_accuracy=v_acc,
+                speed_accuracy=cfg.speed_accuracy,
+                bearing_accuracy=cfg.bearing_accuracy,
+                timestamp=time.time()
+            )
         return
     if tick_s <= 0:
         raise ValueError("tick_s must be positive")
@@ -210,14 +330,54 @@ def simulate(path: list[Point], cfg: MovementConfig, tick_s: float) -> Iterator[
     cum = _cumulative(path)
     total = cum[-1]
     if total <= 0:
-        yield path[0]
+        # Degenerate path
+        noise_gen = GaussMarkovNoise(cfg.gm_sigma, cfg.gm_beta, cfg.seed) if cfg.use_gm_noise else None
+        acc_model = AccuracyModel(cfg.h_accuracy_base, cfg.h_accuracy_var, 
+                                 cfg.v_accuracy_base, cfg.v_accuracy_var, cfg.seed)
+        rng = random.Random(cfg.seed)
+        p = path[0]
+        if noise_gen:
+            p = noise_gen.apply_to_point(p, tick_s)
+        h_acc, v_acc = acc_model.sample()
+        alt = cfg.base_altitude + rng.uniform(-cfg.altitude_variation, cfg.altitude_variation)
+        yield LocationFix(
+            lat=p.lat, lon=p.lon, altitude=alt,
+            speed=0.0, bearing=0.0,
+            h_accuracy=h_acc, v_accuracy=v_acc,
+            speed_accuracy=cfg.speed_accuracy,
+            bearing_accuracy=cfg.bearing_accuracy,
+            timestamp=time.time()
+        )
         return
     turns = _turn_distances(path, cum, cfg.turn_threshold_deg)
     rng = random.Random(cfg.seed)
+    
+    # Initialize realistic GPS models
+    noise_gen = GaussMarkovNoise(cfg.gm_sigma, cfg.gm_beta, cfg.seed) if cfg.use_gm_noise else None
+    acc_model = AccuracyModel(cfg.h_accuracy_base, cfg.h_accuracy_var, 
+                             cfg.v_accuracy_base, cfg.v_accuracy_var, cfg.seed)
 
     d = 0.0
     v = 0.0
-    yield path[0]
+    prev_point = path[0]
+    
+    # First fix
+    p = path[0]
+    if cfg.use_gm_noise and noise_gen:
+        p = noise_gen.apply_to_point(p, tick_s)
+    elif cfg.jitter_m > 0:
+        p = _jitter(p, cfg.jitter_m, rng)
+    h_acc, v_acc = acc_model.sample()
+    alt = cfg.base_altitude + rng.uniform(-cfg.altitude_variation, cfg.altitude_variation)
+    yield LocationFix(
+        lat=p.lat, lon=p.lon, altitude=alt,
+        speed=0.0, bearing=0.0,
+        h_accuracy=h_acc, v_accuracy=v_acc,
+        speed_accuracy=cfg.speed_accuracy,
+        bearing_accuracy=cfg.bearing_accuracy,
+        timestamp=time.time()
+    )
+    
     # guard against pathological configs producing an unbounded loop
     max_ticks = int(total / max(0.01, cfg.max_speed) / tick_s) + 10_000
     for _ in range(max_ticks):
@@ -250,13 +410,94 @@ def simulate(path: list[Point], cfg: MovementConfig, tick_s: float) -> Iterator[
 
         d += eff * tick_s
         if d >= total:
-            yield _jitter(path[-1], cfg.jitter_m, rng)
+            # Final fix
+            p = path[-1]
+            if cfg.use_gm_noise and noise_gen:
+                p = noise_gen.apply_to_point(p, tick_s)
+            elif cfg.jitter_m > 0:
+                p = _jitter(p, cfg.jitter_m, rng)
+            h_acc, v_acc = acc_model.sample()
+            alt += rng.uniform(-cfg.altitude_variation * 0.5, cfg.altitude_variation * 0.5)
+            yield LocationFix(
+                lat=p.lat, lon=p.lon, altitude=alt,
+                speed=0.0, bearing=bearing_deg(prev_point, path[-1]),
+                h_accuracy=h_acc, v_accuracy=v_acc,
+                speed_accuracy=cfg.speed_accuracy,
+                bearing_accuracy=cfg.bearing_accuracy,
+                timestamp=time.time()
+            )
             return
-        yield _jitter(point_at_distance(path, cum, d), cfg.jitter_m, rng)
+        
+        curr_point = point_at_distance(path, cum, d)
+        bearing = bearing_deg(prev_point, curr_point) if haversine_m(prev_point, curr_point) > 0.1 else 0.0
+        
+        # Apply noise
+        p = curr_point
+        if cfg.use_gm_noise and noise_gen:
+            p = noise_gen.apply_to_point(p, tick_s)
+        elif cfg.jitter_m > 0:
+            p = _jitter(p, cfg.jitter_m, rng)
+        
+        h_acc, v_acc = acc_model.sample()
+        alt += rng.uniform(-cfg.altitude_variation * 0.5, cfg.altitude_variation * 0.5)
+        
+        yield LocationFix(
+            lat=p.lat, lon=p.lon, altitude=alt,
+            speed=eff, bearing=bearing,
+            h_accuracy=h_acc, v_accuracy=v_acc,
+            speed_accuracy=cfg.speed_accuracy,
+            bearing_accuracy=cfg.bearing_accuracy,
+            timestamp=time.time()
+        )
+        prev_point = curr_point
 
         # came to rest short of the end (shouldn't normally happen) -> nudge on
         if v <= 0.0 and target <= 0.0 and (total - d) > 1.0:
             v = cfg.accel * tick_s
+
+
+def simulate_stationary(point: Point, cfg: MovementConfig, tick_s: float, 
+                       duration_s: Optional[float] = None) -> Iterator[LocationFix]:
+    """Yield GPS fixes for a stationary position with realistic drift.
+    
+    Simulates a phone sitting still: position drifts gradually (Gauss-Markov),
+    accuracy varies, altitude wobbles slightly. Useful for testing stationary
+    location features.
+    
+    Args:
+        point: The nominal stationary position
+        cfg: Movement configuration (uses noise/accuracy params)
+        tick_s: Update interval in seconds
+        duration_s: Total duration; None means infinite
+    """
+    if tick_s <= 0:
+        raise ValueError("tick_s must be positive")
+    
+    noise_gen = GaussMarkovNoise(cfg.gm_sigma * 0.6, cfg.gm_beta * 0.5, cfg.seed) if cfg.use_gm_noise else None
+    acc_model = AccuracyModel(cfg.h_accuracy_base, cfg.h_accuracy_var, 
+                             cfg.v_accuracy_base, cfg.v_accuracy_var, cfg.seed)
+    rng = random.Random(cfg.seed)
+    alt = cfg.base_altitude + rng.uniform(-cfg.altitude_variation, cfg.altitude_variation)
+    
+    ticks = int(duration_s / tick_s) if duration_s else 999999999
+    for _ in range(ticks):
+        p = point
+        if noise_gen:
+            p = noise_gen.apply_to_point(p, tick_s)
+        elif cfg.jitter_m > 0:
+            p = _jitter(p, cfg.jitter_m * 0.5, rng)  # Less jitter when stationary
+        
+        h_acc, v_acc = acc_model.sample()
+        alt += rng.uniform(-cfg.altitude_variation * 0.3, cfg.altitude_variation * 0.3)
+        
+        yield LocationFix(
+            lat=p.lat, lon=p.lon, altitude=alt,
+            speed=0.0, bearing=0.0,
+            h_accuracy=h_acc, v_accuracy=v_acc,
+            speed_accuracy=cfg.speed_accuracy,
+            bearing_accuracy=cfg.bearing_accuracy,
+            timestamp=time.time()
+        )
 
 
 def parse_gpx(data: str) -> list[Point]:

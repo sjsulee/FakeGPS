@@ -1,0 +1,47 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+html,body{margin:0;height:100%;font-family:-apple-system,"Noto Sans KR",sans-serif}
+#map{position:absolute;top:0;bottom:0;left:0;right:0}
+#top{position:absolute;top:10px;left:10px;right:10px;z-index:1000;display:flex;gap:6px}
+#q{flex:1;padding:12px;font-size:16px;border:1px solid #ccc;border-radius:10px}
+#top button{padding:0 14px;font-size:16px;border:0;border-radius:10px;background:#333;color:#fff}
+#bar{position:absolute;bottom:16px;left:10px;right:10px;z-index:1000;background:#fff;border-radius:14px;padding:12px;box-shadow:0 2px 12px rgba(0,0,0,.25)}
+#info{font-size:14px;color:#444;margin-bottom:10px}
+.row{display:flex;gap:8px}
+.row button{flex:1;padding:14px;font-size:16px;border:0;border-radius:10px;color:#fff}
+#tp{background:#1a73e8}#rs{background:#d93025}
+#res{position:absolute;top:60px;left:10px;right:10px;z-index:1001;background:#fff;border-radius:10px;max-height:40%;overflow:auto;box-shadow:0 2px 10px rgba(0,0,0,.2)}
+#res div{padding:12px;border-bottom:1px solid #eee;font-size:14px}
+</style></head><body>
+<div id="map"></div>
+<div id="top"><input id="q" placeholder="장소 검색 (예: 인천공항 제2여객터미널)"><button id="sb">검색</button></div>
+<div id="res"></div>
+<div id="bar"><div id="info">지도를 눌러 이동할 위치를 고르세요.</div>
+<div class="row"><button id="tp">여기로 이동</button><button id="rs">실제 위치로 복귀</button></div></div>
+<script>
+var map=L.map('map',{zoomControl:false}).setView([37.5663,126.9779],13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+var pin=null,cur=null,sel=null;
+function info(t){document.getElementById('info').textContent=t}
+function setPin(lat,lon){sel=[lat,lon];if(pin)pin.setLatLng(sel);else pin=L.marker(sel).addTo(map);
+ info('선택: '+lat.toFixed(5)+', '+lon.toFixed(5));}
+map.on('click',function(e){setPin(e.latlng.lat,e.latlng.lng)});
+function showCur(){var c=Native.current();if(!c){if(cur){map.removeLayer(cur);cur=null}return}
+ var p=c.split(',').map(Number);if(cur)cur.setLatLng(p);else cur=L.circleMarker(p,{radius:9,color:'#1a73e8',fillOpacity:.8}).addTo(map);}
+document.getElementById('tp').onclick=function(){if(!sel){info('먼저 지도를 눌러 위치를 고르세요.');return}
+ var r=Native.teleport(sel[0],sel[1]);
+ info(r=='nomock'?'모의 위치 권한이 없어요. 개발자 옵션에서 이 앱을 모의 위치 앱으로 선택해 주세요.':'이동 완료: '+sel[0].toFixed(5)+', '+sel[1].toFixed(5));
+ setTimeout(showCur,300)};
+document.getElementById('rs').onclick=function(){Native.restore();info('실제 위치로 돌아갔어요.');setTimeout(showCur,300)};
+function search(){var q=document.getElementById('q').value.trim();if(!q)return;var res=document.getElementById('res');res.innerHTML='<div>검색 중…</div>';
+ fetch('https://nominatim.openstreetmap.org/search?format=json&limit=6&accept-language=ko&countrycodes=kr&q='+encodeURIComponent(q))
+ .then(r=>r.json()).then(a=>{res.innerHTML='';if(!a.length){res.innerHTML='<div>결과가 없어요</div>';setTimeout(()=>res.innerHTML='',1500);return}
+ a.forEach(function(x){var d=document.createElement('div');d.textContent=x.display_name;d.onclick=function(){res.innerHTML='';var la=+x.lat,lo=+x.lon;map.setView([la,lo],16);setPin(la,lo)};res.appendChild(d)})})
+ .catch(()=>{res.innerHTML='<div>검색 실패 (인터넷 확인)</div>'})}
+document.getElementById('sb').onclick=search;
+document.getElementById('q').addEventListener('keydown',e=>{if(e.key=='Enter')search()});
+setTimeout(function(){showCur();var c=Native.current();if(c){var p=c.split(',').map(Number);map.setView(p,15);info('현재 가짜 위치: '+p[0].toFixed(5)+', '+p[1].toFixed(5))}},400);
+</script></body></html>

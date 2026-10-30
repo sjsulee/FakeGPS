@@ -16,6 +16,7 @@ class DemoLocationDriver(LocationDriver):
     def __init__(self, info: DeviceInfo):
         self.info = info
         self.last: tuple[float, float] | None = None
+        self.last_fix = None
 
     def connect(self) -> "DemoLocationDriver":
         return self
@@ -23,9 +24,24 @@ class DemoLocationDriver(LocationDriver):
     def set_location(self, lat: float, lon: float) -> None:
         self.last = (lat, lon)
         log.info("[demo %s] -> %.6f, %.6f", self.info.udid, lat, lon)
+    
+    def set_location_fix(self, fix) -> None:
+        """Set location with full GPS metadata."""
+        from ..routing import LocationFix
+        if isinstance(fix, LocationFix):
+            self.last = (fix.lat, fix.lon)
+            self.last_fix = fix
+            log.info(
+                "[demo %s] -> %.6f, %.6f | alt=%.1fm spd=%.1fm/s brg=%.0f° acc=±%.1fm",
+                self.info.udid, fix.lat, fix.lon, fix.altitude, fix.speed, 
+                fix.bearing, fix.h_accuracy
+            )
+        else:
+            self.set_location(fix.lat, fix.lon)
 
     def clear(self) -> None:
         self.last = None
+        self.last_fix = None
         log.info("[demo %s] cleared", self.info.udid)
 
 

@@ -52,19 +52,20 @@
       </div>
 
       <div id="panel-route" class="panel hidden">
-        <p class="muted">Click the map to add waypoints (need 2+).</p>
+        <p class="muted">Click the map to add waypoints (need 2+), or 1 for stationary.</p>
         <div class="row">
           <button id="route-clear">Clear pts</button>
           <label class="chk"><input type="checkbox" id="route-loop" /> Loop</label>
         </div>
         <div class="row">
           <label class="chk"><input type="checkbox" id="route-realistic" /> 擬真移動</label>
+          <label class="chk"><input type="checkbox" id="route-stationary" /> 靜止模式</label>
         </div>
         <div id="jitter-row" class="row hidden">
           <label for="route-jitter">GPS 抖動 (m)</label>
-          <input id="route-jitter" type="number" min="0" max="20" step="0.5" value="0" />
+          <input id="route-jitter" type="number" min="0" max="20" step="0.5" value="5" />
         </div>
-        <p class="muted">擬真模式：起步加速、轉彎/終點減速、速度微抖；抖動模擬 GPS 雜訊。</p>
+        <p class="muted">擬真模式：起步加速、轉彎/終點減速、速度微抖；靜止模式：停留一點，模擬 GPS 漂移。</p>
         <div class="row">
           <input type="file" id="gpx" accept=".gpx" />
         </div>
@@ -88,6 +89,7 @@
     <section>
       <button id="clear" class="danger">Stop &amp; restore real GPS</button>
       <div id="status" class="muted"></div>
+      <div id="gps-info" class="muted"></div>
     </section>
   </div>
 

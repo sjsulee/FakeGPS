@@ -134,6 +134,20 @@ class Session:
         await asyncio.to_thread(driver.set_location, lat, lon)
         self.current = routing.Point(lat, lon)
         await self._broadcast({"type": "position", "lat": lat, "lon": lon})
+    
+    async def _push_fix(self, fix: routing.LocationFix) -> None:
+        driver = self._require()
+        await asyncio.to_thread(driver.set_location_fix, fix)
+        self.current = routing.Point(fix.lat, fix.lon)
+        await self._broadcast({
+            "type": "position", 
+            "lat": fix.lat, 
+            "lon": fix.lon,
+            "altitude": fix.altitude,
+            "speed": fix.speed,
+            "bearing": fix.bearing,
+            "h_accuracy": fix.h_accuracy,
+        })
 
     async def clear(self) -> None:
         await self.stop_playback()
@@ -156,30 +170,41 @@ class Session:
     # -- route playback --------------------------------------------------
     async def play_route(self, points: list[routing.Point], speed_mps: float,
                          loop: bool, realistic: bool = False,
-                         jitter_m: float = 0.0) -> None:
+                         jitter_m: float = 0.0, stationary: bool = False) -> None:
         await self.stop_playback()
         self._require()
         self._play_task = asyncio.create_task(
-            self._run_route(points, speed_mps, loop, realistic, jitter_m)
+            self._run_route(points, speed_mps, loop, realistic, jitter_m, stationary)
         )
 
     def _fixes(self, points: list[routing.Point], speed_mps: float,
-               realistic: bool, jitter_m: float):
+               realistic: bool, jitter_m: float, stationary: bool = False):
         """Pick constant-speed vs lifelike playback for one pass of the route."""
+        if stationary and points:
+            # Static mode: drift around a single point
+            cfg = routing.MovementConfig.for_speed(0.0, jitter_m=jitter_m, use_gm_noise=True)
+            return routing.simulate_stationary(points[0], cfg, TICK_S)
         if realistic:
-            cfg = routing.MovementConfig.for_speed(speed_mps, jitter_m=jitter_m)
+            cfg = routing.MovementConfig.for_speed(speed_mps, jitter_m=jitter_m, use_gm_noise=True)
             return routing.simulate(points, cfg, TICK_S)
-        return routing.walk(points, speed_mps, TICK_S)
+        # Legacy simple walk: wrap Points into LocationFix for consistent interface
+        for pt in routing.walk(points, speed_mps, TICK_S):
+            yield routing.LocationFix(
+                lat=pt.lat, lon=pt.lon,
+                altitude=50.0, speed=speed_mps, bearing=0.0,
+                h_accuracy=5.0, v_accuracy=8.0,
+                speed_accuracy=0.5, bearing_accuracy=10.0
+            )
 
     async def _run_route(self, points: list[routing.Point], speed_mps: float,
-                         loop: bool, realistic: bool, jitter_m: float) -> None:
+                         loop: bool, realistic: bool, jitter_m: float, stationary: bool = False) -> None:
         try:
             await self._broadcast({"type": "route_started", "n": len(points)})
             while True:
-                for pt in self._fixes(points, speed_mps, realistic, jitter_m):
-                    await self._push(pt.lat, pt.lon)
+                for fix in self._fixes(points, speed_mps, realistic, jitter_m, stationary):
+                    await self._push_fix(fix)
                     await asyncio.sleep(TICK_S)
-                if not loop:
+                if not loop or stationary:
                     break
                 points = list(reversed(points))  # ping-pong so it stays continuous
             await self._broadcast({"type": "route_finished"})
@@ -246,6 +271,7 @@ class RouteReq(BaseModel):
     loop: bool = False
     realistic: bool = False     # accelerate/brake + turn slowdown vs constant speed
     jitter_m: float = 0.0       # GPS noise std-dev in metres (realistic mode only)
+    stationary: bool = False    # static position mode with drift
 
 
 # --------------------------------------------------------------------------- #
@@ -287,9 +313,13 @@ async def api_joystick(req: JoystickReq):
 @app.post("/api/route")
 async def api_route(req: RouteReq):
     pts = [routing.Point(p.lat, p.lon) for p in req.points]
-    if len(pts) < 2:
+    if req.stationary:
+        # Stationary mode: only needs 1 point
+        if len(pts) < 1:
+            raise HTTPException(status_code=400, detail="stationary mode needs 1 point")
+    elif len(pts) < 2:
         raise HTTPException(status_code=400, detail="route needs >= 2 points")
-    await session.play_route(pts, req.speed, req.loop, req.realistic, req.jitter_m)
+    await session.play_route(pts, req.speed, req.loop, req.realistic, req.jitter_m, req.stationary)
     return {"ok": True}
 
 

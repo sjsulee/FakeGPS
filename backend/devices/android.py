@@ -113,6 +113,30 @@ class AndroidLocationDriver(LocationDriver):
             ],
             self.info.udid,
         )
+    
+    def set_location_fix(self, fix) -> None:
+        """Set location with full GPS metadata."""
+        from ..routing import LocationFix
+        if not isinstance(fix, LocationFix):
+            self.set_location(fix.lat, fix.lon)
+            return
+        
+        # Build intent with all available fields
+        cmd = [
+            "shell", "am", "broadcast",
+            "-a", ACTION_SET,
+            "-n", f"{COMPANION_PKG}/.LocationReceiver",
+            "--ef", "lat", repr(fix.lat),
+            "--ef", "lon", repr(fix.lon),
+            "--ef", "altitude", repr(fix.altitude),
+            "--ef", "speed", repr(fix.speed),
+            "--ef", "bearing", repr(fix.bearing),
+            "--ef", "h_accuracy", repr(fix.h_accuracy),
+            "--ef", "v_accuracy", repr(fix.v_accuracy),
+            "--ef", "speed_accuracy", repr(fix.speed_accuracy),
+            "--ef", "bearing_accuracy", repr(fix.bearing_accuracy),
+        ]
+        _run(cmd, self.info.udid)
 
     def clear(self) -> None:
         try:

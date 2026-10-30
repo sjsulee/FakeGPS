@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..routing import LocationFix
 
 
 @dataclass
@@ -25,7 +29,19 @@ class LocationDriver(abc.ABC):
 
     @abc.abstractmethod
     def set_location(self, lat: float, lon: float) -> None:
-        """Move the device's reported location to (lat, lon)."""
+        """Move the device's reported location to (lat, lon).
+        
+        Legacy method for simple teleport/joystick. Use set_location_fix for
+        full GPS simulation with altitude, speed, bearing, and accuracies.
+        """
+
+    def set_location_fix(self, fix: "LocationFix") -> None:
+        """Set location with complete GPS metadata.
+        
+        Default implementation calls set_location with lat/lon only.
+        Platform drivers should override to pass full metadata when supported.
+        """
+        self.set_location(fix.lat, fix.lon)
 
     @abc.abstractmethod
     def clear(self) -> None:
