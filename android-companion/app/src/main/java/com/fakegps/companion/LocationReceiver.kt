@@ -18,14 +18,19 @@ class LocationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             ACTION_SET -> {
-                val svc = ensureService(context) ?: return
                 val lat = intent.getFloatExtra("lat", Float.NaN).toDouble()
                 val lon = intent.getFloatExtra("lon", Float.NaN).toDouble()
                 if (lat.isNaN() || lon.isNaN()) {
                     Log.w(TAG, "SET_LOCATION missing lat/lon")
                     return
                 }
-                svc.apply(lat, lon)
+                val live = MockLocationService.instance
+                if (live != null) { live.apply(lat, lon); return }
+                // Service not running: start it and hand over this fix so it isn't dropped.
+                val i = Intent(context, MockLocationService::class.java).putExtra("lat", lat).putExtra("lon", lon)
+                try { context.startService(i) } catch (e: Exception) {
+                    try { context.startForegroundService(i) } catch (e2: Exception) { Log.e(TAG, "cannot start service", e2) }
+                }
             }
             ACTION_CLEAR -> MockLocationService.instance?.release()
             else -> Log.w(TAG, "unknown action ${intent.action}")

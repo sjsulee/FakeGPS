@@ -45,8 +45,22 @@ class MockLocationService : Service() {
     override fun onCreate() {
         super.onCreate()
         lm = getSystemService(LOCATION_SERVICE) as LocationManager
-        startInForeground()
+        try {
+            startInForeground()
+        } catch (e: Exception) {
+            // Android 14+/15 refuses a location FGS started from background; keep running anyway.
+            Log.w(TAG, "startForeground refused, continuing in background", e)
+        }
         ensureProvider()
+        // Restore the last coordinate so a restart doesn't drop back to real GPS.
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        if (prefs.contains("lat") && prefs.contains("lon")) {
+            lastLat = java.lang.Double.longBitsToDouble(prefs.getLong("lat", 0))
+            lastLon = java.lang.Double.longBitsToDouble(prefs.getLong("lon", 0))
+            pushCurrent()
+            handler.postDelayed(heartbeat, HEARTBEAT_MS)
+            Log.i(TAG, "restored last location")
+        }
     }
 
     private fun ensureProvider() {
@@ -76,6 +90,9 @@ class MockLocationService : Service() {
         if (!providerReady) return
         lastLat = lat
         lastLon = lon
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putLong("lat", java.lang.Double.doubleToRawLongBits(lat))
+            .putLong("lon", java.lang.Double.doubleToRawLongBits(lon)).apply()
         pushCurrent()
         // (re)arm the heartbeat so this fix is kept fresh until the next update.
         handler.removeCallbacks(heartbeat)
@@ -107,10 +124,18 @@ class MockLocationService : Service() {
         }
     }
 
+    fun currentLat(): Double? = lastLat
+    fun currentLon(): Double? = lastLon
+    fun isMockAllowed(): Boolean {
+        ensureProvider()
+        return providerReady
+    }
+
     fun release() {
         handler.removeCallbacks(heartbeat)
         lastLat = null
         lastLon = null
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().clear().apply()
         try {
             lm.removeTestProvider(LocationManager.GPS_PROVIDER)
         } catch (_: Exception) {
@@ -120,6 +145,9 @@ class MockLocationService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         instance = this
+        val lat = intent?.getDoubleExtra("lat", Double.NaN) ?: Double.NaN
+        val lon = intent?.getDoubleExtra("lon", Double.NaN) ?: Double.NaN
+        if (!lat.isNaN() && !lon.isNaN()) apply(lat, lon)
         return START_STICKY
     }
 
@@ -149,6 +177,7 @@ class MockLocationService : Service() {
     companion object {
         private const val TAG = "FakeGPS"
         private const val CHANNEL = "fakegps"
+        private const val PREFS = "fakegps_state"
         private const val HEARTBEAT_MS = 1000L  // re-push interval to keep mock fresh
 
         // Simple singleton so the broadcast receiver can reach the live service.
