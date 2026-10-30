@@ -35,6 +35,13 @@ class MockLocationService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     @Volatile private var lastLat: Double? = null
     @Volatile private var lastLon: Double? = null
+    @Volatile private var lastAltitude: Double = 0.0
+    @Volatile private var lastSpeed: Float = 0f
+    @Volatile private var lastBearing: Float = 0f
+    @Volatile private var lastHAccuracy: Float = 5f
+    @Volatile private var lastVAccuracy: Float = 3f
+    @Volatile private var lastSpeedAccuracy: Float = 0.5f
+    @Volatile private var lastBearingAccuracy: Float = 10f
     private val heartbeat = object : Runnable {
         override fun run() {
             pushCurrent()
@@ -57,6 +64,13 @@ class MockLocationService : Service() {
         if (prefs.contains("lat") && prefs.contains("lon")) {
             lastLat = java.lang.Double.longBitsToDouble(prefs.getLong("lat", 0))
             lastLon = java.lang.Double.longBitsToDouble(prefs.getLong("lon", 0))
+            lastAltitude = java.lang.Double.longBitsToDouble(prefs.getLong("altitude", 0))
+            lastSpeed = prefs.getFloat("speed", 0f)
+            lastBearing = prefs.getFloat("bearing", 0f)
+            lastHAccuracy = prefs.getFloat("h_accuracy", 5f)
+            lastVAccuracy = prefs.getFloat("v_accuracy", 3f)
+            lastSpeedAccuracy = prefs.getFloat("speed_accuracy", 0.5f)
+            lastBearingAccuracy = prefs.getFloat("bearing_accuracy", 10f)
             pushCurrent()
             handler.postDelayed(heartbeat, HEARTBEAT_MS)
             Log.i(TAG, "restored last location")
@@ -85,14 +99,32 @@ class MockLocationService : Service() {
         }
     }
 
-    fun apply(lat: Double, lon: Double) {
+    fun apply(lat: Double, lon: Double, altitude: Double = 0.0, 
+              speed: Float = 0f, bearing: Float = 0f,
+              hAccuracy: Float = 5f, vAccuracy: Float = 3f,
+              speedAccuracy: Float = 0.5f, bearingAccuracy: Float = 10f) {
         ensureProvider()
         if (!providerReady) return
         lastLat = lat
         lastLon = lon
+        lastAltitude = altitude
+        lastSpeed = speed
+        lastBearing = bearing
+        lastHAccuracy = hAccuracy
+        lastVAccuracy = vAccuracy
+        lastSpeedAccuracy = speedAccuracy
+        lastBearingAccuracy = bearingAccuracy
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
             .putLong("lat", java.lang.Double.doubleToRawLongBits(lat))
-            .putLong("lon", java.lang.Double.doubleToRawLongBits(lon)).apply()
+            .putLong("lon", java.lang.Double.doubleToRawLongBits(lon))
+            .putLong("altitude", java.lang.Double.doubleToRawLongBits(altitude))
+            .putFloat("speed", speed)
+            .putFloat("bearing", bearing)
+            .putFloat("h_accuracy", hAccuracy)
+            .putFloat("v_accuracy", vAccuracy)
+            .putFloat("speed_accuracy", speedAccuracy)
+            .putFloat("bearing_accuracy", bearingAccuracy)
+            .apply()
         pushCurrent()
         // (re)arm the heartbeat so this fix is kept fresh until the next update.
         handler.removeCallbacks(heartbeat)
@@ -107,14 +139,16 @@ class MockLocationService : Service() {
         val loc = Location(LocationManager.GPS_PROVIDER).apply {
             latitude = lat
             longitude = lon
-            accuracy = 5f
-            altitude = 0.0
+            accuracy = lastHAccuracy
+            altitude = lastAltitude
+            speed = lastSpeed
+            bearing = lastBearing
             time = System.currentTimeMillis()
             elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                bearingAccuracyDegrees = 0.1f
-                verticalAccuracyMeters = 0.1f
-                speedAccuracyMetersPerSecond = 0.01f
+                bearingAccuracyDegrees = lastBearingAccuracy
+                verticalAccuracyMeters = lastVAccuracy
+                speedAccuracyMetersPerSecond = lastSpeedAccuracy
             }
         }
         try {
@@ -147,7 +181,16 @@ class MockLocationService : Service() {
         instance = this
         val lat = intent?.getDoubleExtra("lat", Double.NaN) ?: Double.NaN
         val lon = intent?.getDoubleExtra("lon", Double.NaN) ?: Double.NaN
-        if (!lat.isNaN() && !lon.isNaN()) apply(lat, lon)
+        if (!lat.isNaN() && !lon.isNaN()) {
+            val altitude = intent?.getDoubleExtra("altitude", 0.0) ?: 0.0
+            val speed = intent?.getFloatExtra("speed", 0f) ?: 0f
+            val bearing = intent?.getFloatExtra("bearing", 0f) ?: 0f
+            val hAccuracy = intent?.getFloatExtra("h_accuracy", 5f) ?: 5f
+            val vAccuracy = intent?.getFloatExtra("v_accuracy", 3f) ?: 3f
+            val speedAccuracy = intent?.getFloatExtra("speed_accuracy", 0.5f) ?: 0.5f
+            val bearingAccuracy = intent?.getFloatExtra("bearing_accuracy", 10f) ?: 10f
+            apply(lat, lon, altitude, speed, bearing, hAccuracy, vAccuracy, speedAccuracy, bearingAccuracy)
+        }
         return START_STICKY
     }
 

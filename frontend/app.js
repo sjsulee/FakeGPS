@@ -66,8 +66,18 @@ function connectWS() {
     const m = JSON.parse(ev.data);
     if (m.type === "position") {
       setMarker(m.lat, m.lon);
+      // Show GPS metadata if available
+      if (m.altitude !== undefined || m.speed !== undefined) {
+        const parts = [];
+        if (m.altitude !== undefined) parts.push(`Alt: ${m.altitude.toFixed(1)}m`);
+        if (m.speed !== undefined) parts.push(`Speed: ${m.speed.toFixed(1)}m/s`);
+        if (m.bearing !== undefined) parts.push(`Bearing: ${m.bearing.toFixed(0)}°`);
+        if (m.h_accuracy !== undefined) parts.push(`Acc: ±${m.h_accuracy.toFixed(1)}m`);
+        $("gps-info").textContent = parts.join(" · ");
+      }
     } else if (m.type === "cleared" || m.type === "route_stopped") {
       setStatus("Stopped.");
+      $("gps-info").textContent = "";
     } else if (m.type === "route_finished") {
       setStatus("Route finished.");
       $("route-stop").classList.add("hidden");
@@ -281,12 +291,32 @@ $("route-clear").onclick = () => {
   routeMarkers = [];
   if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
 };
-// Show the jitter field only when realistic movement is on.
-$("route-realistic").onchange = () => {
-  $("jitter-row").classList.toggle("hidden", !$("route-realistic").checked);
+// Show the jitter field only when realistic movement or stationary is on.
+const updateJitterRow = () => {
+  const show = $("route-realistic").checked || $("route-stationary").checked;
+  $("jitter-row").classList.toggle("hidden", !show);
+  // Default jitter for stationary mode
+  if ($("route-stationary").checked && !$("route-jitter").value) {
+    $("route-jitter").value = "5";
+  }
+};
+$("route-realistic").onchange = updateJitterRow;
+$("route-stationary").onchange = () => {
+  updateJitterRow();
+  // Disable loop when stationary
+  if ($("route-stationary").checked) {
+    $("route-loop").checked = false;
+    $("route-loop").disabled = true;
+  } else {
+    $("route-loop").disabled = false;
+  }
 };
 $("do-route").onclick = async () => {
-  if (routePts.length < 2) return setStatus("Add at least 2 waypoints.", true);
+  const stationary = $("route-stationary").checked;
+  const minPts = stationary ? 1 : 2;
+  if (routePts.length < minPts) {
+    return setStatus(`Add at least ${minPts} waypoint${minPts > 1 ? "s" : ""}.`, true);
+  }
   const realistic = $("route-realistic").checked;
   try {
     await api("/api/route", {
@@ -294,9 +324,11 @@ $("do-route").onclick = async () => {
       speed: speed(),
       loop: $("route-loop").checked,
       realistic,
-      jitter_m: realistic ? parseFloat($("route-jitter").value) || 0 : 0,
+      stationary,
+      jitter_m: (realistic || stationary) ? parseFloat($("route-jitter").value) || 0 : 0,
     });
-    setStatus(realistic ? "Route playing… (擬真移動)" : "Route playing…");
+    const modeStr = stationary ? "(靜止模式)" : realistic ? "(擬真移動)" : "";
+    setStatus(`Route playing… ${modeStr}`);
     $("do-route").classList.add("hidden");
     $("route-stop").classList.remove("hidden");
   } catch (e) {
